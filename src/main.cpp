@@ -1398,7 +1398,7 @@ int main( int argc, char** argv )
                 for (int v = 0; v < 3; ++v)
                 {
                     newvert += oldtri.vertex[v];
-                    newnorm += oldtri.normal[v];//charlie charlie kirky i just popped a perky
+                    newnorm += oldtri.normal[v];
                     newcolor += oldtri.color[v];
                     newtexcoord += oldtri.texcoord[v];
                 }
