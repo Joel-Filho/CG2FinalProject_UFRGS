@@ -295,6 +295,17 @@ static void FramebufferSizeCallback(GLFWwindow* window, int width, int height)
     glfwMakeContextCurrent(previous_context);
 }
 
+void window_focus_callback(GLFWwindow* window, int focused) {
+    if (focused) {
+        // The window gained input focus
+        //std::cout << "Window focused!" << std::endl;
+    } else {
+        // The window lost input focus
+        //std::cout << "Window lost focus!" << std::endl;
+        ImGui::SetWindowFocus(NULL);
+    }
+}
+
 // Helper function to load and setup a model with GPU resources
 // Returns true if successful, false otherwise
 bool LoadModelFromFile(const char* filepath, Model& model, float*& model_vert, float*& model_norm, float*& model_tex,
@@ -619,6 +630,9 @@ int main( int argc, char** argv )
 
     ImGui_ImplGlfw_InitForOpenGL(window_gui, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
+
+
+    glfwSetWindowFocusCallback(window_gui, window_focus_callback);
 
     // INIT RENDER WINDOW
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
