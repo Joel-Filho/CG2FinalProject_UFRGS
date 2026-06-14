@@ -755,6 +755,8 @@ int main( int argc, char** argv )
     float selTex[2] = {0.0f,0.0f};
     float selColor[3] = {0.0f,0.0f,0.0f};
 
+    bool move_coincident = true;
+
     // Add Triangle modal state
     bool showAddTriangleModal = false;
     float addPos[9] = {0.0f, 0.0f, 0.0f,
@@ -1182,8 +1184,11 @@ int main( int argc, char** argv )
         // Vertex Editor window
         if (showVertexEditor && selectedTri >= 0 && selectedVert >= 0)
         {
+
             ImGui::Begin("Vertex Editor", &showVertexEditor);
             ImGui::Text("Triangle %d - Vertex %d", selectedTri, selectedVert);
+
+            ImGui::Checkbox("Move Coincident Vertices", &move_coincident);
 
             bool changed = false;
             if (ImGui::InputFloat3("Position", selPos))
@@ -1195,7 +1200,7 @@ int main( int argc, char** argv )
                 const float eps = 1e-5f;
 
                 // If delta is non-zero, apply to all vertices that match oldPos within eps
-                if (glm::length(delta) > 1e-9f)
+                if (glm::length(delta) > 1e-9f && move_coincident)
                 {
                     for (int ti = 0; ti < model.num_triangles; ++ti)
                     {
