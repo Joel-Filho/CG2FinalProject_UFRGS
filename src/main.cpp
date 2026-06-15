@@ -354,7 +354,7 @@ bool LoadModelFromFile(const char* filepath, Model& model, float*& model_vert, f
     {
         stbi_set_flip_vertically_on_load(true);
         int texWidth = 0, texHeight = 0, texChannels = 0;
-        unsigned char* img = stbi_load("../../data/mandrill_256.bmp", &texWidth, &texHeight, &texChannels, 0);
+        unsigned char* img = stbi_load("../../data/textures/mandrill_256.bmp", &texWidth, &texHeight, &texChannels, 0);
         if (!img)
         {
             printf("WARNING: failed to load texture image\n");
@@ -498,6 +498,33 @@ bool DeleteTriangle(Model &model, int selectedPolygon)
     }
 
     return false;
+}
+
+void MoveCoincidentVertices(Model &model, glm::vec3 oldPos, glm::vec3 newPos)
+{
+    glm::vec3 delta = newPos - oldPos;
+    const float vertex_eps = 1e-5f;
+    const float delta_eps = 1e-9f;
+
+    // If delta is non-zero, apply to all vertices that match oldPos within eps
+    if (glm::length(delta) > delta_eps)
+    {
+        for (int ti = 0; ti < model.num_triangles; ++ti)
+        {
+            for (int vi = 0; vi < 3; ++vi)
+            {
+                glm::vec3 v = glm::vec3(model.triangles[ti].vertex[vi]);
+                if (glm::length(v - oldPos) <= vertex_eps)
+                {
+                    glm::vec4 updated = model.triangles[ti].vertex[vi];
+                    updated.x += delta.x;
+                    updated.y += delta.y;
+                    updated.z += delta.z;
+                    model.triangles[ti].vertex[vi] = updated;
+                }
+            }
+        }
+    }
 }
 
 // Picking result
@@ -1210,27 +1237,10 @@ int main( int argc, char** argv )
                 // Move the selected vertex and any coincident vertices (within epsilon)
                 glm::vec3 newPos(selPos[0], selPos[1], selPos[2]);
                 glm::vec3 oldPos = glm::vec3(model.triangles[selectedTri].vertex[selectedVert]);
-                glm::vec3 delta = newPos - oldPos;
-                const float eps = 1e-5f;
 
-                // If delta is non-zero, apply to all vertices that match oldPos within eps
-                if (glm::length(delta) > 1e-9f && move_coincident)
+                if (move_coincident)
                 {
-                    for (int ti = 0; ti < model.num_triangles; ++ti)
-                    {
-                        for (int vi = 0; vi < 3; ++vi)
-                        {
-                            glm::vec3 v = glm::vec3(model.triangles[ti].vertex[vi]);
-                            if (glm::length(v - oldPos) <= eps)
-                            {
-                                glm::vec4 updated = model.triangles[ti].vertex[vi];
-                                updated.x += delta.x;
-                                updated.y += delta.y;
-                                updated.z += delta.z;
-                                model.triangles[ti].vertex[vi] = updated;
-                            }
-                        }
-                    }
+                    MoveCoincidentVertices(model,oldPos,newPos);
                 }
                 else
                 {
@@ -1307,6 +1317,8 @@ int main( int argc, char** argv )
             ImGui::Begin("Polygon Editor", &showPolygonEditor);
             ImGui::Text("Triangle %d", selectedPolygon);
 
+            ImGui::Checkbox("Move Coincident Vertices", &move_coincident);
+
             bool polyChanged = false;
             for (int i = 0; i < 3; ++i)
             {
@@ -1316,7 +1328,19 @@ int main( int argc, char** argv )
                 vbuf[2] = model.triangles[selectedPolygon].vertex[i].z;
                 if (ImGui::InputFloat3((std::string("V") + std::to_string(i)).c_str(), vbuf))
                 {
-                    model.triangles[selectedPolygon].vertex[i] = glm::vec4(vbuf[0], vbuf[1], vbuf[2], 1.0f);
+                    // Move the selected vertex and any coincident vertices (within epsilon)
+                    glm::vec3 newPos(vbuf[0], vbuf[1], vbuf[2]);
+                    glm::vec3 oldPos = glm::vec3(model.triangles[selectedPolygon].vertex[i]);
+
+                    if (move_coincident)
+                    {
+                        MoveCoincidentVertices(model,oldPos,newPos);
+                    }
+                    else
+                    {
+                        // tiny/no movement — still set the selected vertex precisely
+                        model.triangles[selectedPolygon].vertex[i] = glm::vec4(newPos, 1.0f);
+                    }
                     polyChanged = true;
                 }
             }
