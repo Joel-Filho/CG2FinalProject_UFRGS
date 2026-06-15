@@ -427,6 +427,38 @@ void UpdateModelBuffers(const Model& model, float* model_vert, float* model_norm
         glDisableVertexAttribArray(vTexCoord);
 }
 
+void RegenArraysUpdateCPU(Model& model, float*& model_vert, float*& model_norm, float*& model_tex, int& NumVertices, glm::vec3& bbox_center, glm::vec3& bbox_size, GLFWwindow* window)
+{
+    // regenerate arrays and update GPU
+    float* new_vert = NULL;
+    float* new_norm = NULL;
+    float* new_tex = NULL;
+    model.tris_to_arrays(new_vert, new_norm, new_tex);
+
+    if (model_vert) delete[] model_vert;
+    if (model_norm) delete[] model_norm;
+    if (model_tex) delete[] model_tex;
+
+    model_vert = new_vert;
+    model_norm = new_norm;
+    model_tex = new_tex;
+
+    NumVertices = model.num_triangles * 3;
+
+    // update bbox center/size used by model matrix
+    bbox_center = (model.bbox_max + model.bbox_min) / 2.0f;
+    bbox_size = model.bbox_max - model.bbox_min;
+
+    GLFWwindow* prev = glfwGetCurrentContext();
+    if (prev != window)
+        glfwMakeContextCurrent(window);
+
+    UpdateModelBuffers(model, model_vert, model_norm, model_tex, NumVertices);
+
+    if (prev != window)
+        glfwMakeContextCurrent(prev);
+}
+
 // Append a triangle to the model (resizes triangle array and updates bbox)
 bool AppendTriangle(Model &model, const Triangle &tri)
 {
@@ -524,6 +556,22 @@ void MoveCoincidentVertices(Model &model, glm::vec3 oldPos, glm::vec3 newPos)
                 }
             }
         }
+    }
+}
+
+void RecalculateNormals(Model &model, int tri_index)
+{
+    const glm::vec3 a = glm::vec3(model.triangles[tri_index].vertex[0]);
+    const glm::vec3 b = glm::vec3(model.triangles[tri_index].vertex[1]);
+    const glm::vec3 c = glm::vec3(model.triangles[tri_index].vertex[2]);
+
+    const glm::vec3 n = glm::cross(b-a,c-a);
+
+    glm::vec4 normal = glm::vec4(glm::normalize(n),0.0f);
+
+    for (int i = 0; i < 3; ++i)
+    {
+        model.triangles[tri_index].normal[i] = normal;
     }
 }
 
@@ -1056,34 +1104,7 @@ int main( int argc, char** argv )
                 // append triangle to model
                 AppendTriangle(model, tri);
 
-                // regenerate arrays and update GPU
-                float* new_vert = NULL;
-                float* new_norm = NULL;
-                float* new_tex = NULL;
-                model.tris_to_arrays(new_vert, new_norm, new_tex);
-
-                if (model_vert) delete[] model_vert;
-                if (model_norm) delete[] model_norm;
-                if (model_tex) delete[] model_tex;
-
-                model_vert = new_vert;
-                model_norm = new_norm;
-                model_tex = new_tex;
-
-                NumVertices = model.num_triangles * 3;
-
-                // update bbox center/size used by model matrix
-                bbox_center = (model.bbox_max + model.bbox_min) / 2.0f;
-                bbox_size = model.bbox_max - model.bbox_min;
-
-                GLFWwindow* prev = glfwGetCurrentContext();
-                if (prev != window)
-                    glfwMakeContextCurrent(window);
-
-                UpdateModelBuffers(model, model_vert, model_norm, model_tex, NumVertices);
-
-                if (prev != window)
-                    glfwMakeContextCurrent(prev);
+                RegenArraysUpdateCPU(model, model_vert, model_norm, model_tex, NumVertices, bbox_center, bbox_size, window);
 
                 showAddTriangleModal = false;
             }
@@ -1097,18 +1118,31 @@ int main( int argc, char** argv )
             ImGui::End();
         }
 
+        /* ignore this lowkey
+        if (ImGui::Button("Recalculate Model Normals"))
+        {
+            for (int t = 0; t < model.num_triangles; ++t)
+                RecalculateNormals(model, t);
 
-        ImGui::SeparatorText("Texture Options");
-        ImGui::Checkbox("Texture",&texture_used);
-        ImGui::SameLine();
-        if (!texture_used) ImGui::BeginDisabled();
-        ImGui::RadioButton("NN",&resampling_used,0);
-        ImGui::SameLine();
-        ImGui::RadioButton("Bilinear",&resampling_used,1);
-        ImGui::SameLine();
-        ImGui::RadioButton("Trilinear",&resampling_used,2);
-        if (!texture_used) ImGui::EndDisabled();
+            RegenArraysUpdateCPU(model, model_vert, model_norm, model_tex, NumVertices, bbox_center, bbox_size, window);
+        }
+        */
 
+        if (model.has_texture)
+        {
+            ImGui::SeparatorText("Texture Options");
+            ImGui::Checkbox("Texture",&texture_used);
+            ImGui::SameLine();
+            if (!texture_used) ImGui::BeginDisabled();
+            ImGui::RadioButton("NN",&resampling_used,0);
+            ImGui::SameLine();
+            ImGui::RadioButton("Bilinear",&resampling_used,1);
+            ImGui::SameLine();
+            ImGui::RadioButton("Trilinear",&resampling_used,2);
+            if (!texture_used) ImGui::EndDisabled();
+        }
+
+        ImGui::SeparatorText("Shading Options");
         //if (renderingAPI == 1) //shaders só pra OpenGL; Not anymore they aren't.
             //ImGui::BeginDisabled();
         ImGui::RadioButton("GourAD",&shader_used,0);
@@ -1276,30 +1310,7 @@ int main( int argc, char** argv )
 
             if (changed)
             {
-                // regenerate arrays and update GPU in the render window's GL context
-                float* new_vert = NULL;
-                float* new_norm = NULL;
-                float* new_tex = NULL;
-                model.tris_to_arrays(new_vert, new_norm, new_tex);
-
-                if (model_vert) delete[] model_vert;
-                if (model_norm) delete[] model_norm;
-                if (model_tex) delete[] model_tex;
-
-                model_vert = new_vert;
-                model_norm = new_norm;
-                model_tex = new_tex;
-
-                NumVertices = model.num_triangles * 3;
-
-                GLFWwindow* prevContext = glfwGetCurrentContext();
-                if (prevContext != window)
-                    glfwMakeContextCurrent(window);
-
-                UpdateModelBuffers(model, model_vert, model_norm, model_tex, NumVertices);
-
-                if (prevContext != window)
-                    glfwMakeContextCurrent(prevContext);
+                RegenArraysUpdateCPU(model, model_vert, model_norm, model_tex, NumVertices, bbox_center, bbox_size, window);
             }
 
             ImGui::End();
@@ -1367,61 +1378,21 @@ int main( int argc, char** argv )
 
             if (polyChanged)
             {
-                // regenerate arrays and update GPU
-                float* new_vert = NULL;
-                float* new_norm = NULL;
-                float* new_tex = NULL;
-                model.tris_to_arrays(new_vert, new_norm, new_tex);
-
-                if (model_vert) delete[] model_vert;
-                if (model_norm) delete[] model_norm;
-                if (model_tex) delete[] model_tex;
-
-                model_vert = new_vert;
-                model_norm = new_norm;
-                model_tex = new_tex;
-
-                NumVertices = model.num_triangles * 3;
-
-                GLFWwindow* prev = glfwGetCurrentContext();
-                if (prev != window)
-                    glfwMakeContextCurrent(window);
-
-                UpdateModelBuffers(model, model_vert, model_norm, model_tex, NumVertices);
-
-                if (prev != window)
-                    glfwMakeContextCurrent(prev);
+                RegenArraysUpdateCPU(model, model_vert, model_norm, model_tex, NumVertices, bbox_center, bbox_size, window);
             }
 
             ImGui::Separator();
+            if (ImGui::Button("Recalculate Normals"))
+            {
+                RecalculateNormals(model, selectedPolygon);
+                RegenArraysUpdateCPU(model, model_vert, model_norm, model_tex, NumVertices, bbox_center, bbox_size, window);
+            }
+
             if (ImGui::Button("Delete Triangle"))
             {
                 if (DeleteTriangle(model, selectedPolygon))
                 {
-                    // regenerate arrays and update GPU
-                    float* new_vert = NULL;
-                    float* new_norm = NULL;
-                    float* new_tex = NULL;
-                    model.tris_to_arrays(new_vert, new_norm, new_tex);
-
-                    if (model_vert) delete[] model_vert;
-                    if (model_norm) delete[] model_norm;
-                    if (model_tex) delete[] model_tex;
-
-                    model_vert = new_vert;
-                    model_norm = new_norm;
-                    model_tex = new_tex;
-
-                    NumVertices = model.num_triangles * 3;
-
-                    GLFWwindow* prev = glfwGetCurrentContext();
-                    if (prev != window)
-                        glfwMakeContextCurrent(window);
-
-                    UpdateModelBuffers(model, model_vert, model_norm, model_tex, NumVertices);
-
-                    if (prev != window)
-                        glfwMakeContextCurrent(prev);
+                    RegenArraysUpdateCPU(model, model_vert, model_norm, model_tex, NumVertices, bbox_center, bbox_size, window);
 
                     showPolygonEditor = false;
                     selectedPolygon = -1;
@@ -1483,29 +1454,7 @@ int main( int argc, char** argv )
                 DeleteTriangle(model, selectedPolygon);
 
                 // regenerate arrays and update GPU
-                float* new_vert = NULL;
-                float* new_norm = NULL;
-                float* new_tex = NULL;
-                model.tris_to_arrays(new_vert, new_norm, new_tex);
-
-                if (model_vert) delete[] model_vert;
-                if (model_norm) delete[] model_norm;
-                if (model_tex) delete[] model_tex;
-
-                model_vert = new_vert;
-                model_norm = new_norm;
-                model_tex = new_tex;
-
-                NumVertices = model.num_triangles * 3;
-
-                GLFWwindow* prev = glfwGetCurrentContext();
-                if (prev != window)
-                    glfwMakeContextCurrent(window);
-
-                UpdateModelBuffers(model, model_vert, model_norm, model_tex, NumVertices);
-
-                if (prev != window)
-                    glfwMakeContextCurrent(prev);
+                RegenArraysUpdateCPU(model, model_vert, model_norm, model_tex, NumVertices, bbox_center, bbox_size, window);
 
                 showPolygonEditor = false;
                 selectedPolygon = -1;
