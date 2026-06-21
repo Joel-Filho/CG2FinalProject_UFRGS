@@ -235,9 +235,12 @@ static void glfw_error_callback(int error, const char* description)
 
 // Mouse movement
 double delta = 0.0f;
+double rightDelta = 0.0f;
 double lastX;
+double lastRightX;
 double raw_sens = 0.01f;
 bool mousePressed = false;
+bool rightMousePressed = false;
 bool firstMouse = true;
 
 // Keyboard debounce for file operations
@@ -245,6 +248,7 @@ bool lastCtrlO = false;
 bool lastCtrlS = false;
 bool lastCtrlMouse = false;
 bool lastCtrlMouseMiddle = false;
+bool lastRightMouse = false;
 bool lastEsc = false;
 
 // Polygon selection state
@@ -261,13 +265,18 @@ void CursorPosCallback(GLFWwindow* window, double xpos, double ypos)
     {
         double dummy;
         glfwGetCursorPos(window, &lastX, &dummy);
+        lastRightX = lastX;
         firstMouse = false;
     }
 
     if (mousePressed)
         delta = (xpos - lastX) * raw_sens;
 
+    if (rightMousePressed)
+        rightDelta = (xpos - lastRightX) * raw_sens;
+
     lastX = xpos;
+    lastRightX = xpos;
 }
 
 // source: old fcg material
@@ -281,6 +290,22 @@ void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
             mousePressed = true;
         else if (action == GLFW_RELEASE)
             mousePressed = false;
+    }
+    else if (button == GLFW_MOUSE_BUTTON_RIGHT)
+    {
+        rightDelta = 0.0f;
+
+        if (action == GLFW_PRESS)
+        {
+            rightMousePressed = true;
+            double dummyY;
+            glfwGetCursorPos(window, &lastRightX, &dummyY);
+        }
+        else if (action == GLFW_RELEASE)
+        {
+            rightMousePressed = false;
+            rightDelta = 0.0f;
+        }
     }
 }
 
@@ -814,6 +839,10 @@ int main( int argc, char** argv )
 
     //Visualization aids
     bool draw_normals = 0;
+    //Modeling aids
+    int vertexmouseaxis = 0; //0 - X, 1 - Y, 2 - Z
+    int polygonmouseaxis = 0; //0 - X, 1 - Y, 2 - Z
+    float morphsens = 1.0f;
 
     //Texture
     bool texture_used = true;
@@ -1308,6 +1337,16 @@ int main( int argc, char** argv )
                 changed = true;
             }
 
+            ImGui::Text("Right click + drag: move vertex");
+            ImGui::Text("Mouse morphing axis");
+            ImGui::SameLine();
+            ImGui::RadioButton("X",&vertexmouseaxis,0);
+            ImGui::SameLine();
+            ImGui::RadioButton("Y",&vertexmouseaxis,1);
+            ImGui::SameLine();
+            ImGui::RadioButton("Z",&vertexmouseaxis,2);
+            ImGui::SliderFloat("Morphing Sens.", &morphsens, 0.0f, 10.0f, "%.2f");
+
             if (changed)
             {
                 RegenArraysUpdateCPU(model, model_vert, model_norm, model_tex, NumVertices, bbox_center, bbox_size, window);
@@ -1330,6 +1369,16 @@ int main( int argc, char** argv )
 
             ImGui::Checkbox("Move Coincident Vertices", &move_coincident);
 
+            ImGui::Text("Ctrl + Right click + drag: move polygon");
+            ImGui::Text("Mouse morphing axis:");
+            ImGui::SameLine();
+            ImGui::RadioButton("X",&polygonmouseaxis,0);
+            ImGui::SameLine();
+            ImGui::RadioButton("Y",&polygonmouseaxis,1);
+            ImGui::SameLine();
+            ImGui::RadioButton("Z",&polygonmouseaxis,2);
+            ImGui::SliderFloat("Morphing Sens.", &morphsens, 0.0f, 10.0f, "%.2f");
+
             bool polyChanged = false;
             for (int i = 0; i < 3; ++i)
             {
@@ -1342,6 +1391,7 @@ int main( int argc, char** argv )
                     // Move the selected vertex and any coincident vertices (within epsilon)
                     glm::vec3 newPos(vbuf[0], vbuf[1], vbuf[2]);
                     glm::vec3 oldPos = glm::vec3(model.triangles[selectedPolygon].vertex[i]);
+                    
 
                     if (move_coincident)
                     {
@@ -1517,6 +1567,95 @@ int main( int argc, char** argv )
                 else
                 {
                     camera.translate_along_axis(axis, delta*sens);
+                }
+            }
+            // Vertex dragging with right mouse button (when a vertex is selected in the vertex editor)
+            if (rightMousePressed && selectedTri >= 0 && selectedVert >= 0)
+            {
+                float dragAmount = (float)(rightDelta * sens * morphsens);
+                if (std::fabs(dragAmount) > 0.0f)
+                {
+                    glm::vec3 oldPos = glm::vec3(model.triangles[selectedTri].vertex[selectedVert]);
+                    glm::vec3 newPos = oldPos;
+                    if (vertexmouseaxis == 0)
+                        newPos.x += dragAmount;
+                    else if (vertexmouseaxis == 1)
+                        newPos.y += dragAmount;
+                    else if (vertexmouseaxis == 2)
+                        newPos.z += dragAmount;
+
+                    if (move_coincident)
+                    {
+                        MoveCoincidentVertices(model, oldPos, newPos);
+                    }
+                    else
+                    {
+                        model.triangles[selectedTri].vertex[selectedVert] = glm::vec4(newPos, 1.0f);
+                    }
+
+                    selPos[0] = newPos.x;
+                    selPos[1] = newPos.y;
+                    selPos[2] = newPos.z;
+
+                    RegenArraysUpdateCPU(model, model_vert, model_norm, model_tex, NumVertices, bbox_center, bbox_size, window);
+                }
+            }
+
+            // Polygon dragging with Ctrl + Right Mouse (when a polygon is selected in the polygon editor)
+            // Dragging moves each distinct vertex of the polygon along the selected polygon axis.
+            if (rightMousePressed && showPolygonEditor && selectedPolygon >= 0)
+            {
+                bool ctrlPressedLocal = (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS);
+                if (ctrlPressedLocal)
+                {
+                    float dragAmount = (float)(rightDelta * sens * morphsens);
+                    if (std::fabs(dragAmount) > 0.0f)
+                    {
+                        const float vertex_eps = 1e-5f;
+                        std::vector<glm::vec3> processed;
+
+                        for (int vi = 0; vi < 3; ++vi)
+                        {
+                            glm::vec3 oldPos = glm::vec3(model.triangles[selectedPolygon].vertex[vi]);
+
+                            // skip if we already moved vertices at approximately the same position
+                            bool already = false;
+                            for (const auto &p : processed)
+                            {
+                                if (glm::length(p - oldPos) <= vertex_eps) { already = true; break; }
+                            }
+                            if (already) continue;
+
+                            glm::vec3 newPos = oldPos;
+                            if (polygonmouseaxis == 0)
+                                newPos.x += dragAmount;
+                            else if (polygonmouseaxis == 1)
+                                newPos.y += dragAmount;
+                            else
+                                newPos.z += dragAmount;
+
+                            if (move_coincident)
+                            {
+                                MoveCoincidentVertices(model, oldPos, newPos);
+                            }
+                            else
+                            {
+                                // update only this polygon's vertex
+                                for (int k = 0; k < 3; ++k)
+                                {
+                                    glm::vec3 vv = glm::vec3(model.triangles[selectedPolygon].vertex[k]);
+                                    if (glm::length(vv - oldPos) <= vertex_eps)
+                                    {
+                                        model.triangles[selectedPolygon].vertex[k] = glm::vec4(newPos, 1.0f);
+                                    }
+                                }
+                            }
+
+                            processed.push_back(oldPos);
+                        }
+
+                        RegenArraysUpdateCPU(model, model_vert, model_norm, model_tex, NumVertices, bbox_center, bbox_size, window);
+                    }
                 }
             }
         }
