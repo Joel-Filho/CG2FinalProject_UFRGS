@@ -452,6 +452,63 @@ void UpdateModelBuffers(const Model& model, float* model_vert, float* model_norm
         glDisableVertexAttribArray(vTexCoord);
 }
 
+// Helper function to update GPU buffers for the preview sub-model
+void UpdatePreviewBuffers(const Model& model, float* model_vert, float* model_norm, float* model_tex, int NumVertices, GLuint previewVAO, GLuint previewBuffers[NumBuffers])
+{
+    glBindVertexArray(previewVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, previewBuffers[VertexBuffer]);
+    glBufferStorage(GL_ARRAY_BUFFER, NumVertices * 3 * sizeof(float), model_vert, GL_DYNAMIC_STORAGE_BIT);
+    glVertexAttribPointer(vPosition, 3, GL_FLOAT, GL_FALSE, 0, BUFFER_OFFSET(0));
+    glEnableVertexAttribArray(vPosition);
+
+    glBindBuffer(GL_ARRAY_BUFFER, previewBuffers[NormalBuffer]);
+    glBufferStorage(GL_ARRAY_BUFFER, NumVertices * 3 * sizeof(float), model_norm, GL_DYNAMIC_STORAGE_BIT);
+    glVertexAttribPointer(vNormal, 3, GL_FLOAT, GL_FALSE, 0, BUFFER_OFFSET(0));
+    glEnableVertexAttribArray(vNormal);
+
+    if (model.has_texture && model_tex != NULL)
+    {
+        glBindBuffer(GL_ARRAY_BUFFER, previewBuffers[TexBuffer]);
+        glBufferStorage(GL_ARRAY_BUFFER, NumVertices * 2 * sizeof(float), model_tex, GL_DYNAMIC_STORAGE_BIT);
+        glVertexAttribPointer(vTexCoord, 2, GL_FLOAT, GL_FALSE, 0, BUFFER_OFFSET(0));
+        glEnableVertexAttribArray(vTexCoord);
+    }
+    else
+    {
+        glDisableVertexAttribArray(vTexCoord);
+    }
+
+    // Clear bindings to avoid leaking attribute state into other VAOs
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+}
+
+// Helper function to clean up preview model resources 
+void CleanupPreviewModel(float*& preview_vert, float*& preview_norm, float*& preview_tex, GLuint& previewVAO, GLuint previewBuffers[NumBuffers], GLuint& previewTextureID)
+{
+    if (preview_vert) delete[] preview_vert;
+    if (preview_norm) delete[] preview_norm;
+    if (preview_tex) delete[] preview_tex;
+    preview_vert = nullptr;
+    preview_norm = nullptr;
+    preview_tex = nullptr;
+
+    if (previewVAO != 0)
+    {
+        glDeleteVertexArrays(1, &previewVAO);
+        previewVAO = 0;
+    }
+    glDeleteBuffers(NumBuffers, previewBuffers);
+    for (int i = 0; i < NumBuffers; ++i)
+        previewBuffers[i] = 0;
+
+    if (previewTextureID != 0)
+    {
+        glDeleteTextures(1, &previewTextureID);
+        previewTextureID = 0;
+    }
+}
+
 void RegenArraysUpdateCPU(Model& model, float*& model_vert, float*& model_norm, float*& model_tex, int& NumVertices, glm::vec3& bbox_center, glm::vec3& bbox_size, GLFWwindow* window)
 {
     // regenerate arrays and update GPU
@@ -885,6 +942,23 @@ int main( int argc, char** argv )
                       1.0f, 0.0f,
                       0.0f, 1.0f};
     float addColor[3] = {1.0f, 1.0f, 1.0f};
+    // Add submodel modal state
+    bool showAddsubmodelModal = false;
+    float addSubmodelPos[3] = {0.0f, 0.0f, 0.0f};
+    float fineadjustment[3] = {0.0f, 0.0f, 0.0f};
+
+    bool previewSubmodelLoaded = false;
+    Model previewSubmodel;
+    float* preview_sub_vert = NULL;
+    float* preview_sub_norm = NULL;
+    float* preview_sub_tex = NULL;
+    int previewNumVertices = 0;
+    GLuint previewTextureID = 0;
+    glm::vec3 preview_bbox_center(0.0f);
+    glm::vec3 preview_bbox_size(0.0f);
+    GLuint previewVAO = 0;
+    GLuint previewBuffers[NumBuffers] = {0};
+    std::string previewSubmodelFilename;
 
     float sens = 1.0f;
 
@@ -1142,6 +1216,103 @@ int main( int argc, char** argv )
             if (ImGui::Button("Cancel"))
             {
                 showAddTriangleModal = false;
+            }
+
+            ImGui::End();
+        }
+
+        if (ImGui::Button("Add submodel")) {
+            // This code runs ONLY on the frame the user clicks the button
+            showAddsubmodelModal = true;
+        }
+
+        // Add sub-model modal window
+        if (showAddsubmodelModal)
+        {
+            ImGui::Begin("Add Sub-model", &showAddsubmodelModal, ImGuiWindowFlags_AlwaysAutoResize);
+            ImGui::Text("Position");
+            ImGui::InputFloat3("Position", addSubmodelPos);
+            ImGui::SliderFloat("Fine adjustment - X", &fineadjustment[0], -1.0f, 1.0f, "%.2f");
+            ImGui::SliderFloat("Fine adjustment - Y", &fineadjustment[1], -1.0f, 1.0f, "%.2f");
+            ImGui::SliderFloat("Fine adjustment - Z", &fineadjustment[2], -1.0f, 1.0f, "%.2f");
+
+            ImGui::Separator();
+            if (ImGui::Button("Choose model"))
+            {
+                std::string filepath = OpenFileDialog();
+                if (!filepath.empty())
+                {
+                    // cleanup any existing preview state first
+                    if (previewSubmodelLoaded)
+                    {
+                        CleanupPreviewModel(preview_sub_vert, preview_sub_norm, preview_sub_tex, previewVAO, previewBuffers, previewTextureID);
+                        previewSubmodel = Model();
+                        previewSubmodelLoaded = false;
+                        previewNumVertices = 0;
+                        previewSubmodelFilename.clear();
+                    }
+                    // load the new sub-model for preview
+                    if (LoadModelFromFile(filepath.c_str(), previewSubmodel, preview_sub_vert, preview_sub_norm, preview_sub_tex, previewTextureID, previewNumVertices, preview_bbox_center, preview_bbox_size))
+                    {
+                        previewSubmodelFilename = filepath; // store the filename for display
+                        previewSubmodelLoaded = true;
+                        glGenVertexArrays(1, &previewVAO);
+                        glCreateBuffers(NumBuffers, previewBuffers);
+                        glBindVertexArray(previewVAO);
+                        UpdatePreviewBuffers(previewSubmodel, preview_sub_vert, preview_sub_norm, preview_sub_tex, previewNumVertices, previewVAO, previewBuffers);
+                        printf("Sub-model loaded for preview: %s\n", filepath.c_str());
+                    }
+                    else
+                    {
+                        printf("Failed to load sub-model: %s\n", filepath.c_str());
+                    }
+                }
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Confirm") && previewSubmodelLoaded)
+            {
+                glm::vec3 translation(addSubmodelPos[0] + fineadjustment[0], addSubmodelPos[1] + fineadjustment[1], addSubmodelPos[2] + fineadjustment[2]);
+                for (int t = 0; t < previewSubmodel.num_triangles; ++t)
+                {
+                    Triangle tri = previewSubmodel.triangles[t];
+                    for (int v = 0; v < 3; ++v)
+                    {
+                        tri.vertex[v] = glm::vec4(glm::vec3(tri.vertex[v]) + translation, 1.0f);
+                    }
+                    AppendTriangle(model, tri);
+                }
+                RegenArraysUpdateCPU(model, model_vert, model_norm, model_tex, NumVertices, bbox_center, bbox_size, window);
+                CleanupPreviewModel(preview_sub_vert, preview_sub_norm, preview_sub_tex, previewVAO, previewBuffers, previewTextureID);
+                previewSubmodel = Model();
+                previewSubmodelLoaded = false;
+                previewNumVertices = 0;
+                previewSubmodelFilename.clear();
+                showAddsubmodelModal = false;
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel"))
+            {
+                showAddsubmodelModal = false;
+                if (previewSubmodelLoaded)
+                {
+                    CleanupPreviewModel(preview_sub_vert, preview_sub_norm, preview_sub_tex, previewVAO, previewBuffers, previewTextureID);
+                    previewSubmodel = Model();
+                    previewSubmodelLoaded = false;
+                    previewNumVertices = 0;
+                    previewSubmodelFilename.clear();
+                }
+            }
+
+            if (previewSubmodelLoaded)
+            {
+                ImGui::Text("Previewing: %s", previewSubmodelFilename.c_str());
+                ImGui::Text("Current translation: (%.2f, %.2f, %.2f)", addSubmodelPos[0] + fineadjustment[0], addSubmodelPos[1] + fineadjustment[1], addSubmodelPos[2] + fineadjustment[2]);
+            }
+            else
+            {
+                ImGui::Text("No preview model loaded.");
             }
 
             ImGui::End();
@@ -1839,6 +2010,34 @@ int main( int argc, char** argv )
 
         glBindVertexArray(VAOs[LoadedModel0]);
         glDrawArrays(GL_TRIANGLES, 0, NumVertices);
+
+        if (previewSubmodelLoaded && previewVAO != 0 && previewNumVertices > 0) // draw preview submodel if loaded
+        {
+            //bug: currently, this function appears to draw a copy of the current model instead of the proper preview model. This is because the preview model's VAO is not being bound correctly, and the vertex data for the preview model is not being uploaded to the GPU. To fix this, we need to ensure that the preview model's vertex data is uploaded to a separate VBO and that the correct VAO is bound before drawing.
+
+            glm::vec3 previewTranslation = glm::vec3(addSubmodelPos[0] + fineadjustment[0], addSubmodelPos[1] + fineadjustment[1], addSubmodelPos[2] + fineadjustment[2]);
+            glm::mat4 preview_model_matrix = model_matrix * glm::translate(glm::mat4(1.0f), previewTranslation);
+
+            glUniform1i(useTextureUniform, 0);
+            glUniform4f(color_uniform, 1.0f, 1.0f, 0.0f, 1.0f);
+            GLuint preview_vs[2] = {0, 0}; GLuint preview_fs[1] = {0}; // subroutine indices for preview draw
+            preview_vs[vert_diff_uniform] = vert_noLighting;
+            preview_vs[vert_spec_uniform] = vert_noLighting;
+            preview_fs[frag_shading_uniform] = frag_noShading;
+            glUniformSubroutinesuiv(GL_VERTEX_SHADER, 2, preview_vs);
+            glUniformSubroutinesuiv(GL_FRAGMENT_SHADER, 1, preview_fs);
+            glUniformMatrix4fv(model_matrix_uniform, 1, GL_FALSE, glm::value_ptr(preview_model_matrix));
+
+            glBindVertexArray(previewVAO);
+            glBindBuffer(GL_ARRAY_BUFFER, previewBuffers[VertexBuffer]);
+            glDrawArrays(GL_TRIANGLES, 0, previewNumVertices);
+
+            // restore main VAO, shading mode, and model matrix after preview draw
+            glBindVertexArray(VAOs[LoadedModel0]);
+            glUniformSubroutinesuiv(GL_VERTEX_SHADER, 2, vs_indices);
+            glUniformSubroutinesuiv(GL_FRAGMENT_SHADER, 1, fs_indices);
+            glUniformMatrix4fv(model_matrix_uniform, 1, GL_FALSE, glm::value_ptr(model_matrix));
+        }
 
         // Highlight selected polygon if any (draw on top, textureless bright yellow)
         if (selectedPolygon >= 0)
